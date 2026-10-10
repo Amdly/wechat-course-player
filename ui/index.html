@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>课程播放助手</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header><div><span class="eyebrow">微信 · 本机运行</span><h1>课程播放助手</h1><p>自动查看课程进度，继续播放未完成课程。</p></div><span id="badge" class="badge">准备就绪</span></header>
+  <div class="layout"><section class="panel settings"><h2>运行设置</h2>
+    <label for="cycles">最大循环次数</label><div class="number"><input id="cycles" type="number" min="1" max="100" value="3"><span>门新完成课程</span></div>
+    <p class="hint">每新完成一门计为一次。已完成课程跳过，不占次数；未完成课程继续播放。</p>
+    <label for="minutes">最长运行时间</label><div class="number"><input id="minutes" type="number" min="1" max="1440" value="480"><span>分钟</span></div>
+    <p class="hint">从当前课程开始，随后遍历“全部课程”。达到任一上限后停止。</p>
+    <p id="power" class="hint">运行期间自动保持屏幕和系统唤醒，停止后恢复正常。</p>
+    <button id="start" class="primary">开始运行 <span>→</span></button><button id="stop" class="stop" disabled>停止运行</button>
+    <button id="inspect" class="quiet">检查当前页面</button><p id="inspection" class="hint" aria-live="polite">请打开微信课程页。运行会将微信置前并使用鼠标，请保持电脑解锁；可随时停止。</p>
+  </section>
+  <section class="main-panel"><div class="stats"><article><span>本次新完成</span><strong id="completed">0<small> / 3</small></strong></article><article><span>已完成，已跳过</span><strong id="skipped">0</strong></article><article><span>已检查课程</span><strong id="inspected">0</strong></article></div>
+    <div class="panel now"><span class="eyebrow">当前课程</span><h2 id="course">等待开始</h2><p id="message" aria-live="polite">打开微信课程页后，点击开始运行。</p>
+      <div class="progress-label"><span>页面学习进度</span><b id="percent">—</b></div><progress id="progress" value="0" max="100"></progress><p id="playtime" class="hint">完成次数以课程页面确认达到 100% 为准。</p>
+    </div>
+    <div class="panel log"><div class="section-title"><h2>运行记录</h2><span>记录自动保存在本机</span></div><ol id="events"><li class="empty">开始后将在这里显示播放、跳过和完成记录。</li></ol></div>
+    <details class="panel preview"><summary>查看最近识别的课程画面</summary><p class="hint">仅显示微信内嵌网页区域。</p><img id="screenshot" alt="最近一次课程页面截图"></details>
+  </section></div>
+  <footer>停止运行会暂停视频，或返回课程概览结束播放。重新开始时重新核对平台进度，已完成课程仍会跳过。</footer>
+</main><script type="module" src="/app.js"></script></body></html>

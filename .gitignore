@@ -1,0 +1,12 @@
+runtime/
+node_modules/
+.env
+.env.*
+*.log
+*.zip
+*.png
+current.json
+click.json
+request.json
+ocr-sample.json
+smoke-navigation.mjs

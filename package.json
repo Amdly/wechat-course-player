@@ -1,0 +1,10 @@
+{
+  "name": "wechat-course-player",
+  "version": "0.1.0",
+  "description": "Windows desktop assistant for WeChat course playback and progress verification",
+  "private": true,
+  "type": "module",
+  "scripts": {"start": "node server.mjs", "test": "node --test test/*.test.mjs", "inspect": "node inspect.mjs"},
+  "engines": {"node": ">=22"},
+  "repository": {"type": "git", "url": "https://github.com/Amdly/wechat-course-player.git"}
+}
