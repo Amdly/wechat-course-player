@@ -35,7 +35,9 @@ cd wechat-course-player
 3. 程序先核对当前课程，再从“全部课程”继续寻找未完成课程。
 4. 点击“停止运行”，或双击 `stop.cmd`，结束任务并暂停视频／返回课程概览。
 
-这是前台桌面操作：程序会将微信置前、移动鼠标和滚动页面。运行时请把鼠标交给程序使用。控制服务绑定 `127.0.0.1`，默认端口为 `18465`，占用时选择 `18466–18475`；启动器打开实际地址。
+这是前台桌面操作：程序在截图、点击和滚动前检查课程窗口，自动恢复最小化窗口并切到前台，再读取最新窗口位置。它仍会占用鼠标、切换焦点，尚不支持完全后台运行。运行时请把鼠标交给程序使用。控制服务绑定 `127.0.0.1`，默认端口为 `18465`，占用时选择 `18466–18475`；启动器打开实际地址。
+
+窗口暂时不可用或截图为全黑／纯色时，程序保持本轮计数，最多等待 2 分钟；恢复后继续。超时则停止并显示原因。锁屏、关闭课程窗口等情况无法仅靠还原最小化窗口解决。窗口恢复使用 Windows [ShowWindowAsync](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindowasync)。
 
 保持唤醒通过 Windows [SetThreadExecutionState](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate) 实现，不修改电源方案。手动锁屏、合盖、睡眠和屏幕保护程序仍可能打断桌面自动化。
 
@@ -66,6 +68,7 @@ cd wechat-course-player
 | `diagnostics.jsonl` | 每 30 秒记录时间、图标识别和保持唤醒状态 |
 | `latest.png` / `snapshot.json` | 最近一次截图与识别结果 |
 | `stop.png` / `stop-snapshot.json` | 自动停止前的画面与识别证据 |
+| `capture-failure.png` | 最近一次被拒绝的黑图或空白截图 |
 | `worker.log` | 工作进程输出 |
 
 运行日志和截图仅保存在本机，均已加入 Git 排除规则。提交问题时，可提供停止原因和必要的脱敏片段。
@@ -78,7 +81,7 @@ node inspect.mjs
 node inspect.mjs --hover
 ```
 
-`inspect.mjs` 只读取课程页面；`--hover` 会将微信置前并移动鼠标，显示播放器控件。请在自动任务停止后使用。
+`inspect.mjs` 会恢复并置前课程窗口后读取页面；`--hover` 还会移动鼠标，显示播放器控件。它不会点击课程按钮。请在自动任务停止后使用。
 
 - 状态机测试覆盖完成计数、提示处理、暂停恢复、缓存时长重置，以及模拟 40 分钟时间不可读时持续监测。
 - Windows 图标测试生成合成画面，验证播放、暂停、隐藏和非图标形状；不需要微信或 OCR。
@@ -86,7 +89,7 @@ node inspect.mjs --hover
 - `test/native-clock.test.mjs` 是可选本地截图回归：只有 Windows 上存在未跟踪的 `test/player-clock.png` 时运行，公开仓库不包含原始课程截图。
 - GitHub Actions 在 Linux 和 Windows 上运行测试；不具备条件的本地截图／Windows 图标测试会自动跳过。
 
-本地完整测试共 28 项通过。实机已验证已有完成记录跳过、播放和暂停图标、继续观看提示、完整单课结束核验，以及跨到下一门课程。新回退逻辑通过真实播放画面与移除时间识别结果的方式验证；模拟等待不等于已做整夜实测。
+测试覆盖完成计数、播放状态、窗口恢复等待、黑图拒绝，以及进度标签漏识别时读取实际百分比。实机已验证已有完成记录跳过、播放和暂停图标、继续观看提示、完整单课结束核验、跨到下一门课程，以及还原最小化窗口后恢复正常截图。播放状态回退逻辑通过真实播放画面与移除时间识别结果的方式验证；模拟等待不等于已做整夜实测。
 
 ## 代码结构
 
@@ -95,6 +98,7 @@ node inspect.mjs --hover
 | `server.mjs`、`ui/` | 本机控制界面与接口 |
 | `run.mjs`、`controller.mjs` | 运行状态机、完成核验与诊断 |
 | `bridge.mjs`、`native.ps1` | 窗口定位、坐标核验、截图和鼠标输入 |
+| `window-guard.cs`、`capture-recovery.mjs` | 恢复窗口、前台检查、拒绝黑图和限时重试 |
 | `ocr.ps1`、`player-controls.ps1` | 全页与独立时间栏 OCR |
 | `player-vision.cs`、`player-glyph.ps1` | 不依赖时间文字的图标识别 |
 | `recognize.mjs` | 页面、课程、进度和提示识别 |

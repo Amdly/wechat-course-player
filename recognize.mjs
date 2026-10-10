@@ -21,10 +21,17 @@ export function analyze(s) {
   if (/本学年已获得12学时|不计算有效时长|不算学时/.test(text)) return {...base, kind: 'blocked', reason: '平台提示已达到本学年有效学时上限。'};
   if (find('正在加载中')) return {...base, kind: 'loading'};
   const refresh = find('刷新学习进度');
-  const progressLine = lines.find(l => l.text.startsWith('学习进度'));
-  if (refresh && progressLine && (learning || find('主讲:'))) {
+  const progressRows = lines.filter(l => l.text.startsWith('学习进度'));
+  // The pale progress label can disappear from OCR. A right-aligned percentage
+  // directly above its refresh button is still readable evidence of progress.
+  if (refresh) for (const percent of lines.filter(l => /^(100|\d{1,2})%$/.test(l.text) && l.x > s.width * .7)) {
+    const nearbyRefresh = lines.some(l => l.text.includes('刷新学习进度') && l.y > percent.y && l.y - percent.y < s.width * .13);
+    if (nearbyRefresh && !progressRows.some(l => Math.abs(l.y - percent.y) < Math.max(40, l.height * 1.7))) progressRows.push(percent);
+  }
+  progressRows.sort((a,b)=>a.y-b.y);
+  if (refresh && progressRows.length && (learning || find('主讲:'))) {
     const entries=[];
-    for(const progressLine of lines.filter(l=>l.text.startsWith('学习进度'))){
+    for(const progressLine of progressRows){
       const percent=lines.filter(l=>Math.abs(l.y-progressLine.y)<Math.max(40,progressLine.height*1.7)).map(l=>l.text.match(/(?:^|[^\d])(100|\d{1,2})%/)).find(Boolean);
       const lecturer=lines.filter(l=>l.text.includes('主讲:')&&l.y<progressLine.y&&l.y>progressLine.y-s.width*.13).at(-1);
       const titleLine=lecturer?lines.filter(l=>l.y<lecturer.y&&l.y>lecturer.y-s.width*.15&&l.height>s.width*.015).at(-1):null;

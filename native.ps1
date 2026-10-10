@@ -2,6 +2,10 @@ param([Parameter(Mandatory=$true)][string]$RequestFile)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $request=Get-Content -LiteralPath $RequestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+function Stop-Native([string]$Code,[string]$Message){
+    [pscustomobject]@{error=@{code=$Code;message=$Message}} | ConvertTo-Json -Compress
+    exit 2
+}
 Add-Type -AssemblyName System.Drawing
 Add-Type -ReferencedAssemblies 'System.Drawing' -TypeDefinition @'
 using System;
@@ -11,7 +15,7 @@ using System.Runtime.InteropServices;
 public static class CourseDesktop {
  public delegate bool Callback(IntPtr h,IntPtr p);
  public struct Rect {public int Left,Top,Right,Bottom;}
- public class Window {public long handle;public uint pid;public string kind;public int x,y,width,height;}
+ public class Window {public long handle;public uint pid;public string kind;public int x,y,width,height;public bool visible,minimized;}
  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr c);
  [DllImport("user32.dll")] public static extern bool EnumWindows(Callback cb,IntPtr p);
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h,Callback cb,IntPtr p);
@@ -29,8 +33,8 @@ public static class CourseDesktop {
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void keybd_event(byte key,byte scan,uint flags,UIntPtr extra);
  [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint x,uint y,int data,UIntPtr extra);
- public static Window Get(IntPtr h){uint pid;GetWindowThreadProcessId(h,out pid);Rect r;GetWindowRect(h,out r);var b=new StringBuilder(256);GetClassName(h,b,b.Capacity);return new Window{handle=h.ToInt64(),pid=pid,kind=b.ToString(),x=r.Left,y=r.Top,width=r.Right-r.Left,height=r.Bottom-r.Top};}
- public static Window[] List(long parent){var windows=new List<Window>();Callback cb=(h,p)=>{if(IsWindowVisible(h))windows.Add(Get(h));return true;};if(parent==0)EnumWindows(cb,IntPtr.Zero);else EnumChildWindows(new IntPtr(parent),cb,IntPtr.Zero);return windows.ToArray();}
+ public static Window Get(IntPtr h){uint pid;GetWindowThreadProcessId(h,out pid);Rect r;GetWindowRect(h,out r);var b=new StringBuilder(256);GetClassName(h,b,b.Capacity);return new Window{handle=h.ToInt64(),pid=pid,kind=b.ToString(),x=r.Left,y=r.Top,width=r.Right-r.Left,height=r.Bottom-r.Top,visible=IsWindowVisible(h),minimized=IsIconic(h)};}
+ public static Window[] List(long parent,bool includeHidden=false){var windows=new List<Window>();Callback cb=(h,p)=>{if(includeHidden||IsWindowVisible(h))windows.Add(Get(h));return true;};if(parent==0)EnumWindows(cb,IntPtr.Zero);else EnumChildWindows(new IntPtr(parent),cb,IntPtr.Zero);return windows.ToArray();}
  public static void Send(long handle,uint message,long w,int x,int y){long point=((long)(ushort)y<<16)+(ushort)x;if(!PostMessage(new IntPtr(handle),message,new IntPtr(w),new IntPtr(point)))throw new Exception("Window message failed.");}
  public static int[] FindPlay(string file,int cx,int cy,int radius,double scale){
   using(var b=new System.Drawing.Bitmap(file)){
@@ -53,25 +57,46 @@ public static class CourseDesktop {
  }
 }
 '@
+Add-Type -ReferencedAssemblies System.Drawing -Path (Join-Path $PSScriptRoot 'window-guard.cs')
 [void][CourseDesktop]::SetProcessDpiAwarenessContext([IntPtr](-4))
 $wxPids=@(Get-Process -Name Weixin,WeChat -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $webPids=@(Get-Process -Name WeChatAppEx -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+$windowAction='ready'
+# Restore the previously verified root before enumerating its rendering children.
+if($request.root){
+    $knownRoot=[CourseDesktop]::Get([IntPtr]$request.root)
+    if($knownRoot.pid -eq $request.rootPid -and ($knownRoot.pid -in $wxPids -or $knownRoot.pid -in $webPids)){
+        $windowAction=[WindowGuard]::Prepare($request.root)
+        if($windowAction -eq 'unavailable'){Stop-Native 'WINDOW_UNAVAILABLE' 'The course window cannot currently be restored or activated.'}
+    }
+}
 $roots=@([CourseDesktop]::List(0) | Where-Object {$_.pid -in $wxPids -or $_.pid -in $webPids})
 $candidates=New-Object System.Collections.Generic.List[object]
 foreach($root in $roots){
-    if([CourseDesktop]::IsIconic([IntPtr]$root.handle)){continue}
-    $children=@([CourseDesktop]::List($root.handle))
-    $browsers=@($children | Where-Object {$_.kind -eq 'Chrome_WidgetWin_0' -and $_.pid -in $webPids -and $_.width -ge 450 -and $_.height -ge 450})
+    $children=@([CourseDesktop]::List($root.handle,$root.minimized))
+    $browsers=@($children | Where-Object {$_.kind -eq 'Chrome_WidgetWin_0' -and $_.pid -in $webPids -and ($root.minimized -or ($_.width -ge 450 -and $_.height -ge 450))})
     if($root.kind -eq 'Chrome_WidgetWin_0' -and $root.pid -in $webPids){$browsers+=@($root)}
     foreach($browser in $browsers){
-        $renderers=@([CourseDesktop]::List($browser.handle) | Where-Object {$_.kind -eq 'Chrome_RenderWidgetHostHWND' -and $_.width -ge 450 -and $_.height -ge 450})
+        $renderers=@([CourseDesktop]::List($browser.handle,$root.minimized) | Where-Object {$_.kind -eq 'Chrome_RenderWidgetHostHWND' -and ($root.minimized -or ($_.width -ge 450 -and $_.height -ge 450))})
         foreach($renderer in $renderers){$candidates.Add([pscustomobject]@{browser=$browser;renderer=$renderer;root=$root.handle})}
     }
 }
 $candidates=@($candidates | Sort-Object {$_.renderer.handle} -Unique)
-if($request.renderer){$candidates=@($candidates | Where-Object {$_.renderer.handle -eq $request.renderer})}
-if($candidates.Count -ne 1){throw "Expected one visible WeChat webpage, found $($candidates.Count). Restore the course window and close extra webpage windows."}
+if($request.browser){$candidates=@($candidates | Where-Object {$_.browser.handle -eq $request.browser})}
+if($request.renderer){
+    $matching=@($candidates | Where-Object {$_.renderer.handle -eq $request.renderer})
+    # A renderer may be recreated during navigation; only rebind within the same browser on a fresh screenshot.
+    if($matching.Count -gt 0 -or $request.action -ne 'snapshot' -or -not $request.browser){$candidates=$matching}
+}
+if($candidates.Count -eq 0){Stop-Native 'WINDOW_UNAVAILABLE' 'No accessible WeChat course window was found.'}
+if($candidates.Count -ne 1){Stop-Native 'WINDOW_AMBIGUOUS' 'More than one WeChat webpage matches. Keep only the course page open.'}
 $target=$candidates[0]
+$prepared=[WindowGuard]::Prepare($target.root)
+if($prepared -eq 'unavailable'){Stop-Native 'WINDOW_UNAVAILABLE' 'Could not restore or activate the course window.'}
+if($prepared -ne 'ready'){$windowAction=$prepared}
+$target.browser=[CourseDesktop]::Get([IntPtr]$target.browser.handle)
+$target.renderer=[CourseDesktop]::Get([IntPtr]$target.renderer.handle)
+if($target.renderer.width -lt 450 -or $target.renderer.height -lt 450){Stop-Native 'WINDOW_UNAVAILABLE' 'The restored webpage has not finished laying out.'}
 $fingerprint="$($target.browser.handle):$($target.renderer.handle):$($target.browser.x):$($target.browser.y):$($target.browser.width):$($target.browser.height):$($target.renderer.x):$($target.renderer.y):$($target.renderer.width):$($target.renderer.height)"
 if($request.action -ne 'snapshot'){
     if($request.fingerprint -ne $fingerprint){throw 'Window geometry changed since recognition; input cancelled.'}
@@ -118,9 +143,14 @@ $graphics=[System.Drawing.Graphics]::FromImage($bitmap)
 $dc=$graphics.GetHdc()
 try {$success=[CourseDesktop]::PrintWindow([IntPtr]$target.browser.handle,$dc,2)}finally{$graphics.ReleaseHdc($dc)}
 try {
-    if(-not $success){throw 'Window capture failed.'}
+    $blank=[WindowGuard]::IsBlank($bitmap)
+    if(-not $success -or $blank){
+        $bitmap.Save((Join-Path ([IO.Path]::GetDirectoryName($request.image)) 'capture-failure.png'),[System.Drawing.Imaging.ImageFormat]::Png)
+    }else{
     $bitmap.Save($request.image,[System.Drawing.Imaging.ImageFormat]::Png)
+    }
 }finally{$graphics.Dispose();$bitmap.Dispose()}
+if(-not $success -or $blank){Stop-Native 'CAPTURE_BLANK' 'The window returned an empty or black capture; no page input was sent.'}
 $ocr=& (Join-Path $PSScriptRoot 'ocr.ps1') -Image $request.image | ConvertFrom-Json
 $offsetX=$target.renderer.x-$target.browser.x
 $offsetY=$target.renderer.y-$target.browser.y
@@ -147,4 +177,4 @@ if($teacherLine){
         if($triangle.Length -eq 2){$bigPlay=@{x=$triangle[0]-$offsetX;y=$triangle[1]-$offsetY}}
     }
 }
-[pscustomobject]@{capturedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();fingerprint=$fingerprint;browser=$target.browser;renderer=$target.renderer;offsetX=$offsetX;offsetY=$offsetY;width=$ocr.width;height=$ocr.height;lines=$lines;playerControls=$playerControls;controlOcrError=$controlOcrError;glyph=$glyph;controlToggle=$controlToggle;bigPlay=$bigPlay;image=$request.image} | ConvertTo-Json -Depth 8 -Compress
+[pscustomobject]@{capturedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();fingerprint=$fingerprint;browser=$target.browser;renderer=$target.renderer;root=$target.root;rootPid=([CourseDesktop]::Get([IntPtr]$target.root)).pid;windowAction=$windowAction;offsetX=$offsetX;offsetY=$offsetY;width=$ocr.width;height=$ocr.height;lines=$lines;playerControls=$playerControls;controlOcrError=$controlOcrError;glyph=$glyph;controlToggle=$controlToggle;bigPlay=$bigPlay;image=$request.image} | ConvertTo-Json -Depth 8 -Compress

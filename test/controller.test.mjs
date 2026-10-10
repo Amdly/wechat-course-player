@@ -15,6 +15,27 @@ test('reads real-sized overview progress and converts browser pixels to webpage 
   const p=analyze(overview(10));assert.equal(p.kind,'overview');assert.equal(p.progress,10);assert.equal(p.title,'玻璃何以改变世界');
   assert.deepEqual(point(overview(10),p.refresh),{x:750,y:1240});assert.ok(p.open.y>176&&p.open.y<900);
 });
+const faintOverview = (progress=13) => snapshot([
+  line('全球联系的初步建立与世界格局的演变（邹瑜）',151,176,1115,58),
+  line('全球联系的初步建立与世界格局的演变',97,989,830,47),
+  line('主 讲 ： 邹 瑜',97,1078,186,36),line(`${progress} ％`,1315,1151,76,31),
+  line('0 刷 新 学 习 进 度',611,1249,266,35),line('课程简介',112,1507,136,33),
+  line('全部课程',685,1718,80,20),line('学习记录',1169,1719,79,18)
+]);
+test('restored overview remains usable when OCR misses the pale progress label and page header',()=>{
+  const s=faintOverview(),p=analyze(s),c=ctrl();
+  assert.equal(p.kind,'overview');assert.equal(p.progress,13);
+  assert.equal(p.title,'全球联系的初步建立与世界格局的演变');assert.equal(p.entries.length,1);
+  assert.match(c.decide(s).reason,/核对/);assert.match(c.decide(s).reason,/播放/);
+  assert.equal(c.state.current.initialProgress,13);assert.equal(c.state.completed,0);
+  const completed=ctrl();completed.decide(faintOverview(100));completed.decide(faintOverview(100));
+  assert.match(completed.decide(faintOverview(100)).reason,/跳过/);assert.equal(completed.state.completed,0);
+});
+test('an unrelated percentage on the video cannot replace missing course progress',()=>{
+  const s=faintOverview();s.lines=s.lines.filter(l=>!l.text.includes('％'));
+  s.lines.push(line('100%',1315,700,76,31));
+  assert.equal(analyze(s).kind,'unknown');assert.equal(ctrl().decide(s).type,'wait');
+});
 test('a previously completed course is skipped and consumes zero cycles',()=>{
   const c=ctrl();c.decide(overview(100));c.decide(overview(100));const d=c.decide(overview(100));assert.equal(c.state.completed,0);assert.equal(c.state.skipped,1);assert.equal(d.type,'click');assert.match(d.reason,/跳过/);
 });

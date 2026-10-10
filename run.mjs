@@ -4,12 +4,14 @@ import {Bridge} from './bridge.mjs';
 import {Controller} from './controller.mjs';
 import {analyze} from './recognize.mjs';
 import {keepAwake} from './power.mjs';
+import {CaptureRecovery} from './capture-recovery.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 const dir = config.runDir;
 await mkdir(dir, {recursive: true});
 const bridge = new Bridge(dir);
 const controller = new Controller(config);
+const recovery = new CaptureRecovery();
 let stopRequested = false, lastMessage = '', status = 'running';
 let power = null, lastDiagnostic = 0, lastSnapshot = null, lastDecision = null;
 process.on('SIGTERM', () => stopRequested = true);
@@ -31,11 +33,11 @@ async function diagnose(snapshot, decision) {
   lastSnapshot = snapshot; lastDecision = decision;
   if (Date.now() - lastDiagnostic < 30000 && decision.type !== 'stop') return;
   lastDiagnostic = Date.now();
-  await appendFile(path.join(dir, 'diagnostics.jsonl'), JSON.stringify({time: lastDiagnostic, page: decision.page.kind, action: decision.type, reason: decision.reason, timer: decision.page.timer && {current: decision.page.timer.current, total: decision.page.timer.total}, glyph: snapshot.glyph, controlToggle: snapshot.controlToggle, cachedDuration: controller.state.videoDuration, timeReadable: controller.state.timeReadable, clockOCR: (snapshot.playerControls ?? []).map(l => l.text), controlOcrError: snapshot.controlOcrError, completed: controller.state.completed, keepAwake: controller.state.keepAwake}) + '\n');
+  await appendFile(path.join(dir, 'diagnostics.jsonl'), JSON.stringify({time: lastDiagnostic, page: decision.page.kind, action: decision.type, reason: decision.reason, windowAction:snapshot.windowAction, timer: decision.page.timer && {current: decision.page.timer.current, total: decision.page.timer.total}, glyph: snapshot.glyph, controlToggle: snapshot.controlToggle, cachedDuration: controller.state.videoDuration, timeReadable: controller.state.timeReadable, clockOCR: (snapshot.playerControls ?? []).map(l => l.text), controlOcrError: snapshot.controlOcrError, completed: controller.state.completed, keepAwake: controller.state.keepAwake}) + '\n');
 }
-async function preserveStopEvidence() {
+async function preserveStopEvidence(reason = lastDecision?.reason) {
   if (!lastSnapshot) return;
-  await writeFile(path.join(dir, 'stop-snapshot.json'), JSON.stringify({snapshot: lastSnapshot, reason: lastDecision?.reason}, null, 2));
+  await writeFile(path.join(dir, 'stop-snapshot.json'), JSON.stringify({snapshot: lastSnapshot, reason}, null, 2));
   await copyFile(lastSnapshot.image, path.join(dir, 'stop.png'));
 }
 async function delay(ms) {
@@ -65,8 +67,23 @@ try {
   await publish('正在定位微信课程窗口');
   while (!(await stopped())) {
     power.assertActive();
-    const snapshot = await bridge.snapshot();
+    if(Date.now()-controller.startedAt>=config.maxMinutes*60000){
+      status='stopped';await preserveStopEvidence('达到本次运行时长上限。');await pauseIfPlaying();await publish('达到本次运行时长上限。');break;
+    }
+    let snapshot;
+    try {snapshot=await bridge.snapshot();}
+    catch(error){
+      const decision=recovery.failed(error);
+      controller.state.windowStatus='recovering';controller.state.windowError=error.code;
+      if(decision.type==='stop')status='stopped';
+      await publish(decision.reason);
+      if(decision.type==='stop'){await preserveStopEvidence(decision.reason);break;}
+      await delay(decision.delay);continue;
+    }
     if (await stopped()) break;
+    controller.state.windowStatus='ready';controller.state.windowError=null;
+    if(recovery.recovered())await publish('课程窗口和画面已恢复，继续本轮运行。');
+    if(snapshot.windowAction==='restored')await publish('已自动恢复最小化的课程窗口并切到前台。');
     const decision = controller.decide(snapshot);
     await diagnose(snapshot, decision);
     await publish(decision.reason);
